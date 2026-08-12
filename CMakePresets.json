@@ -1,0 +1,60 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-core",
+      "displayName": "Windows core DSP",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/build/core-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SAF_BEETLE_BUILD_PLUGIN": "OFF",
+        "SAF_BEETLE_BUILD_TESTS": "ON",
+        "SAF_BEETLE_BUILD_DEMO": "ON"
+      }
+    },
+    {
+      "name": "windows-plugin",
+      "displayName": "Windows VST3 and standalone",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/build/plugin-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SAF_BEETLE_BUILD_PLUGIN": "ON",
+        "SAF_BEETLE_BUILD_TESTS": "ON",
+        "SAF_BEETLE_BUILD_DEMO": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "core-release",
+      "configurePreset": "windows-core"
+    },
+    {
+      "name": "plugin-release",
+      "configurePreset": "windows-plugin"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "core-release",
+      "configurePreset": "windows-core",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "plugin-release",
+      "configurePreset": "windows-plugin",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
