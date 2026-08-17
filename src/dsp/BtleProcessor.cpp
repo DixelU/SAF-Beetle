@@ -23,10 +23,12 @@ void BtleProcessor::prepare(double sampleRate, std::size_t maximumBlockSize, std
     preparedChannels_ = std::clamp<std::size_t>(channels, 1, 2);
     latencySamples_ = static_cast<std::size_t>(std::llround(sampleRate_ * latencySeconds));
 
-    // Two seconds of history leaves ample room for long frozen fragments while
-    // the fixed 50 ms look-ahead covers forward jitter and packet swaps.
+    // The longest supported stutter/loss repeats one 20 ms packet for 1000
+    // frames. The fixed 50 ms look-ahead still bounds forward reads.
+    const auto maximumCorruptionSamples = static_cast<std::size_t>(
+        std::ceil(sampleRate_ * static_cast<double>(maximumPacketMs) * 0.001)) * 1000;
     historySize_ = latencySamples_
-        + static_cast<std::size_t>(std::ceil(sampleRate_ * 2.0))
+        + std::max(static_cast<std::size_t>(std::ceil(sampleRate_ * 2.0)), maximumCorruptionSamples)
         + maximumBlockSize + 8;
     history_.assign(preparedChannels_, std::vector<float>(historySize_, 0.0f));
     frameReadBase_.assign(preparedChannels_, 0.0);
@@ -49,8 +51,14 @@ void BtleProcessor::reset()
     lastGoodSourceStart_ = 0;
     frozenSourceStart_ = 0;
     stutterFramesRemaining_ = 0;
+    jitterFramesRemaining_ = 0;
+    swapFramesRemaining_ = 0;
+    swapDurationFrames_ = 0;
+    swapOffsetFrames_ = 0;
+    stereoLagFramesRemaining_ = 0;
+    jitterOffsetFrames_ = 0;
     pendingSwapBack_ = false;
-    badChannelState_ = false;
+    badFramesRemaining_ = 0;
     frameMuted_ = false;
     frameAction_ = FrameAction::normal;
     driftOffset_ = 0.0;
@@ -69,6 +77,8 @@ void BtleProcessor::setParameters(const Parameters& parameters) noexcept
     parameters_.quality = clampUnit(parameters_.quality);
     parameters_.packetSizeMs = std::clamp(parameters_.packetSizeMs, minimumPacketMs, maximumPacketMs);
     parameters_.burstiness = clampUnit(parameters_.burstiness);
+    parameters_.burstLengthPackets = std::clamp(parameters_.burstLengthPackets, 1.0f, 1000.0f);
+    parameters_.burstVariance = std::clamp(parameters_.burstVariance, 0.0f, 1.0f);
     parameters_.jitter = clampUnit(parameters_.jitter);
     parameters_.temporalSwap = clampUnit(parameters_.temporalSwap);
     parameters_.stutter = clampUnit(parameters_.stutter);
@@ -171,30 +181,22 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
     currentPacketSamples_ = packetSamplesFromParameters();
     currentNominalStart_ = nominalStart;
     frameMuted_ = false;
-    stereoLagSamples_ = 0.0;
     frameAction_ = FrameAction::normal;
     ++statistics_.frames;
 
     const auto damage = 1.0f - parameters_.quality;
     const auto damageSquared = damage * damage;
-    const auto enterBadChance = damageSquared * 0.08f;
-    const auto remainBadChance = 0.08f + parameters_.burstiness * 0.90f;
+    const auto enterBadChance = damageSquared
+        * (0.02f + parameters_.burstiness * 0.09f);
 
-    if (badChannelState_)
-        badChannelState_ = randomUnit() < remainBadChance;
+    if (stereoLagFramesRemaining_ > 0)
+        --stereoLagFramesRemaining_;
     else
-        badChannelState_ = randomUnit() < enterBadChance;
+        stereoLagSamples_ = 0.0;
 
     auto sourceStart = nominalStart;
 
-    if (stutterFramesRemaining_ > 0)
-    {
-        sourceStart = frozenSourceStart_;
-        --stutterFramesRemaining_;
-        frameAction_ = FrameAction::stutter;
-        ++statistics_.repeatedFrames;
-    }
-    else if (badChannelState_)
+    const auto applyLoss = [&]() noexcept
     {
         ++statistics_.lostFrames;
         if (randomUnit() < 0.12f + damage * 0.28f)
@@ -209,13 +211,52 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
             frameAction_ = FrameAction::lossRepeat;
             ++statistics_.repeatedFrames;
         }
-    }
-    else if (pendingSwapBack_)
+    };
+
+    if (stutterFramesRemaining_ > 0)
     {
-        sourceStart = nominalStart - static_cast<std::int64_t>(currentPacketSamples_);
-        pendingSwapBack_ = false;
-        frameAction_ = FrameAction::swapBackward;
+        sourceStart = frozenSourceStart_;
+        --stutterFramesRemaining_;
+        frameAction_ = FrameAction::stutter;
+        ++statistics_.repeatedFrames;
+    }
+    else if (swapFramesRemaining_ > 0)
+    {
+        const auto returning = pendingSwapBack_;
+        const auto swapOffset = static_cast<std::int64_t>(swapOffsetFrames_)
+            * static_cast<std::int64_t>(currentPacketSamples_);
+        sourceStart = returning ? nominalStart - swapOffset : nominalStart + swapOffset;
+        --swapFramesRemaining_;
+        if (swapFramesRemaining_ == 0)
+        {
+            if (returning)
+                pendingSwapBack_ = false;
+            else
+            {
+                pendingSwapBack_ = true;
+                swapFramesRemaining_ = swapDurationFrames_;
+            }
+        }
+        frameAction_ = returning ? FrameAction::swapBackward : FrameAction::swapForward;
         ++statistics_.swappedFrames;
+    }
+    else if (jitterFramesRemaining_ > 0)
+    {
+        sourceStart += static_cast<std::int64_t>(jitterOffsetFrames_)
+            * static_cast<std::int64_t>(currentPacketSamples_);
+        --jitterFramesRemaining_;
+        frameAction_ = FrameAction::jitter;
+        ++statistics_.jitteredFrames;
+    }
+    else if (badFramesRemaining_ > 0)
+    {
+        --badFramesRemaining_;
+        applyLoss();
+    }
+    else if (randomUnit() < enterBadChance)
+    {
+        badFramesRemaining_ = corruptionLengthFrames() - 1;
+        applyLoss();
     }
     else
     {
@@ -228,14 +269,26 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
         {
             frozenSourceStart_ = lastGoodSourceStart_;
             sourceStart = frozenSourceStart_;
-            stutterFramesRemaining_ = randomInt(1, 7);
+            stutterFramesRemaining_ = corruptionLengthFrames() - 1;
             frameAction_ = FrameAction::stutter;
             ++statistics_.repeatedFrames;
         }
         else if (eventRoll < stutterChance + swapChance)
         {
-            sourceStart = nominalStart + static_cast<std::int64_t>(currentPacketSamples_);
-            pendingSwapBack_ = true;
+            swapDurationFrames_ = corruptionLengthFrames();
+            const auto maximumForwardFrames = std::max(1, static_cast<int>(latencySamples_
+                / currentPacketSamples_) - 1);
+            swapOffsetFrames_ = std::min(swapDurationFrames_,
+                static_cast<std::size_t>(maximumForwardFrames));
+            sourceStart = nominalStart + static_cast<std::int64_t>(swapOffsetFrames_)
+                * static_cast<std::int64_t>(currentPacketSamples_);
+            pendingSwapBack_ = false;
+            swapFramesRemaining_ = swapDurationFrames_ - 1;
+            if (swapFramesRemaining_ == 0)
+            {
+                pendingSwapBack_ = true;
+                swapFramesRemaining_ = swapDurationFrames_;
+            }
             frameAction_ = FrameAction::swapForward;
             ++statistics_.swappedFrames;
         }
@@ -249,6 +302,8 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
                 frameOffset = -1;
             sourceStart += static_cast<std::int64_t>(frameOffset)
                 * static_cast<std::int64_t>(currentPacketSamples_);
+            jitterOffsetFrames_ = frameOffset;
+            jitterFramesRemaining_ = corruptionLengthFrames() - 1;
             frameAction_ = FrameAction::jitter;
             ++statistics_.jitteredFrames;
         }
@@ -258,10 +313,11 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
         }
     }
 
-    if (preparedChannels_ > 1
+    if (preparedChannels_ > 1 && stereoLagFramesRemaining_ == 0
         && randomUnit() < damageSquared * parameters_.stereoSkew * 0.20f)
     {
         stereoLagSamples_ = randomUnit() * static_cast<double>(currentPacketSamples_);
+        stereoLagFramesRemaining_ = corruptionLengthFrames() - 1;
     }
 
     const auto maximumFutureStart = nominalStart
@@ -328,6 +384,15 @@ std::size_t BtleProcessor::packetSamplesFromParameters() const noexcept
 {
     const auto samples = sampleRate_ * static_cast<double>(parameters_.packetSizeMs) * 0.001;
     return std::max<std::size_t>(1, static_cast<std::size_t>(std::llround(samples)));
+}
+
+std::size_t BtleProcessor::corruptionLengthFrames() noexcept
+{
+    const auto logSpread = std::log(2.0f) * parameters_.burstVariance;
+    const auto multiplier = std::exp((randomUnit() * 2.0f - 1.0f) * logSpread);
+    const auto frames = static_cast<std::size_t>(std::llround(
+        static_cast<double>(parameters_.burstLengthPackets) * multiplier));
+    return std::clamp<std::size_t>(frames, 1, 1000);
 }
 
 void BtleProcessor::updateSmoothedControls() noexcept

@@ -18,7 +18,7 @@ The repository contains:
 - independent right-channel lag for phasey stereo failures;
 - a constant 50 ms delayed dry path and host-reported plugin latency;
 - deterministic pattern seeds and host-block-size-independent rendering;
-- a JUCE VST3/standalone wrapper using the generic parameter editor;
+- a JUCE VST3/standalone wrapper with a compact custom dark editor;
 - focused DSP tests and a ten-second WAV demo renderer.
 
 The clean path is deliberately delayed by the same amount as the damaged path.
@@ -31,11 +31,13 @@ away from its expected packet position.
 | --- | --- |
 | Signal Quality | Master health of the simulated link. Lower values increase all failures. |
 | Packet Size | Duration of each independently damaged audio frame. |
-| Burstiness | How likely a loss continues after the first missing packet. |
+| Burstiness | How often a new loss burst is introduced. |
+| Burst Length | Duration of a corruption event in packets, from 1 to 1000. |
+| Burst Variance | Randomises each event length by up to one octave shorter or longer. |
 | Jitter | Reads nearby packets early or late. |
-| Temporal Swap | Emits a future frame and then the displaced earlier frame. |
-| Stutter | Freezes one packet and repeats it several times. |
-| Stereo Desync | Lets the right channel lag for short phasey/flanged failures. |
+| Temporal Swap | Exchanges equally long future and displaced packet ranges. |
+| Stutter | Freezes one packet for the chosen burst duration. |
+| Stereo Desync | Lets the right channel lag for the chosen burst duration. |
 | Clock Drift | Slowly changes the receive position, then performs a hard resync. |
 | Mix | Blends the latency-aligned clean and damaged receive paths. |
 | Output | Output trim in dB. |
@@ -91,5 +93,5 @@ followed by three increasingly damaged sections. The WAV is ignored by Git.
   host's buffer size.
 - Latency remains fixed at 50 ms even when packet size changes, avoiding dynamic
   plugin-delay-compensation changes in the DAW.
-- The current UI is JUCE's generic editor. A packet timeline and SAF visual design
-  belong to the next milestone after the sound model is tuned.
+- The custom editor keeps all controls on one compact surface and preserves the
+  same host-automatable parameter IDs used by existing projects.

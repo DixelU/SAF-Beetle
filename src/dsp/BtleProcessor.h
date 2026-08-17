@@ -12,6 +12,8 @@ struct Parameters
     float quality = 0.65f;
     float packetSizeMs = 5.0f;
     float burstiness = 0.65f;
+    float burstLengthPackets = 8.0f;
+    float burstVariance = 0.15f;
     float jitter = 0.35f;
     float temporalSwap = 0.20f;
     float stutter = 0.25f;
@@ -66,6 +68,7 @@ private:
     [[nodiscard]] float randomUnit() noexcept;
     [[nodiscard]] int randomInt(int minimum, int maximum) noexcept;
     [[nodiscard]] std::size_t packetSamplesFromParameters() const noexcept;
+    [[nodiscard]] std::size_t corruptionLengthFrames() noexcept;
     void updateSmoothedControls() noexcept;
 
     Parameters parameters_;
@@ -84,9 +87,15 @@ private:
     std::int64_t currentNominalStart_ = 0;
     std::int64_t lastGoodSourceStart_ = 0;
     std::int64_t frozenSourceStart_ = 0;
-    int stutterFramesRemaining_ = 0;
+    std::size_t stutterFramesRemaining_ = 0;
+    std::size_t jitterFramesRemaining_ = 0;
+    std::size_t swapFramesRemaining_ = 0;
+    std::size_t swapDurationFrames_ = 0;
+    std::size_t swapOffsetFrames_ = 0;
+    std::size_t stereoLagFramesRemaining_ = 0;
+    int jitterOffsetFrames_ = 0;
     bool pendingSwapBack_ = false;
-    bool badChannelState_ = false;
+    std::size_t badFramesRemaining_ = 0;
     bool frameMuted_ = false;
     FrameAction frameAction_ = FrameAction::normal;
 

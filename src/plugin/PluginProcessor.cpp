@@ -1,4 +1,5 @@
 #include "plugin/PluginProcessor.h"
+#include "plugin/PluginEditor.h"
 
 #include <array>
 #include <cmath>
@@ -49,7 +50,7 @@ bool SafBeetleAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts)
 
 juce::AudioProcessorEditor* SafBeetleAudioProcessor::createEditor()
 {
-    return new juce::GenericAudioProcessorEditor(*this);
+    return new SafBeetleAudioProcessorEditor(*this);
 }
 
 bool SafBeetleAudioProcessor::hasEditor() const { return true; }
@@ -93,6 +94,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout SafBeetleAudioProcessor::cre
     layout.add(std::make_unique<FloatParameter>(ParameterID{"burst", 1}, "Burstiness",
         juce::NormalisableRange<float>{0.0f, 100.0f, 0.1f}, 65.0f,
         juce::AudioParameterFloatAttributes{}.withLabel("%")));
+    layout.add(std::make_unique<FloatParameter>(ParameterID{"burstlen", 1}, "Burst Length",
+        juce::NormalisableRange<float>{1.0f, 1000.0f, 1.0f, 0.25f}, 8.0f,
+        juce::AudioParameterFloatAttributes{}.withLabel(" packets")));
+    layout.add(std::make_unique<FloatParameter>(ParameterID{"burstvar", 1}, "Burst Variance",
+        juce::NormalisableRange<float>{0.0f, 100.0f, 0.1f}, 15.0f,
+        juce::AudioParameterFloatAttributes{}.withLabel("%")));
     layout.add(std::make_unique<FloatParameter>(ParameterID{"jitter", 1}, "Jitter",
         juce::NormalisableRange<float>{0.0f, 100.0f, 0.1f}, 35.0f,
         juce::AudioParameterFloatAttributes{}.withLabel("%")));
@@ -132,6 +139,8 @@ saf::btle::Parameters SafBeetleAudioProcessor::readParameters() const noexcept
     result.quality = value("quality") * 0.01f;
     result.packetSizeMs = packetSizes[static_cast<std::size_t>(packetIndex)];
     result.burstiness = value("burst") * 0.01f;
+    result.burstLengthPackets = value("burstlen");
+    result.burstVariance = value("burstvar") * 0.01f;
     result.jitter = value("jitter") * 0.01f;
     result.temporalSwap = value("swap") * 0.01f;
     result.stutter = value("stutter") * 0.01f;

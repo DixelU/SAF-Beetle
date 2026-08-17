@@ -62,6 +62,8 @@ if(SAF_BEETLE_BUILD_PLUGIN)
     juce_generate_juce_header(SAF_BEETLE)
 
     target_sources(SAF_BEETLE PRIVATE
+        src/plugin/PluginEditor.cpp
+        src/plugin/PluginEditor.h
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginProcessor.h
     )
