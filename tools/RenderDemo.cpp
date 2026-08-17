@@ -122,11 +122,10 @@ int main(int argc, char** argv)
     const auto& stats = processor.getStatistics();
     std::cout << "Rendered " << outputPath << '\n'
               << "frames=" << stats.frames
-              << " lost=" << stats.lostFrames
               << " repeated=" << stats.repeatedFrames
               << " jittered=" << stats.jitteredFrames
               << " swapped=" << stats.swappedFrames
-              << " muted=" << stats.mutedFrames
+              << " stereo-delayed=" << stats.stereoDelayedFrames
               << " resyncs=" << stats.resyncs << '\n';
     return 0;
 }

@@ -31,6 +31,7 @@ struct Statistics
     std::uint64_t repeatedFrames = 0;
     std::uint64_t jitteredFrames = 0;
     std::uint64_t swappedFrames = 0;
+    std::uint64_t stereoDelayedFrames = 0;
     std::uint64_t mutedFrames = 0;
     std::uint64_t resyncs = 0;
 };
@@ -54,8 +55,6 @@ private:
     enum class FrameAction
     {
         normal,
-        lossRepeat,
-        lossMute,
         jitter,
         swapForward,
         swapBackward,
@@ -95,8 +94,6 @@ private:
     std::size_t stereoLagFramesRemaining_ = 0;
     int jitterOffsetFrames_ = 0;
     bool pendingSwapBack_ = false;
-    std::size_t badFramesRemaining_ = 0;
-    bool frameMuted_ = false;
     FrameAction frameAction_ = FrameAction::normal;
 
     double driftOffset_ = 0.0;

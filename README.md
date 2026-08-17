@@ -2,7 +2,7 @@
 
 **SAF Beetle** (BTLE: Bluetooth Loss Emulator) is a real-time audio effect that models a
 failing packetised headphone link. It is intended to create the frozen fragments,
-bursty dropouts, temporal jumps, stereo smearing, and flange-like comb filtering
+bursty glitches, temporal jumps, stereo smearing, and flange-like comb filtering
 heard when a Bluetooth receiver repeatedly loses and reacquires its stream.
 
 This is a perceptual effect, not a bit-exact Bluetooth stack or RF simulator.
@@ -12,8 +12,8 @@ This is a perceptual effect, not a bit-exact Bluetooth stack or RF simulator.
 The repository contains:
 
 - an allocation-free C++20 DSP core, independent of any plugin framework;
-- a burst-loss state model rather than uniformly random dropouts;
-- packet repetition, muting, jitter, forward/backward frame swaps, and stutters;
+- burst-shaped corruption events rather than uniformly random glitches;
+- isolated packet repetition, jitter, forward/backward frame swaps, and stereo lag;
 - clock drift with abrupt receive-buffer resynchronisation;
 - independent right-channel lag for phasey stereo failures;
 - a constant 50 ms delayed dry path and host-reported plugin latency;
@@ -29,9 +29,9 @@ away from its expected packet position.
 
 | Control | Behaviour |
 | --- | --- |
-| Signal Quality | Master health of the simulated link. Lower values increase all failures. |
+| Signal Quality | Master intensity. Lower values increase the selected corruption modes. |
 | Packet Size | Duration of each independently damaged audio frame. |
-| Burstiness | How often a new loss burst is introduced. |
+| Burstiness | How often a new selected corruption burst is introduced. |
 | Burst Length | Duration of a corruption event in packets, from 1 to 1000. |
 | Burst Variance | Randomises each event length by up to one octave shorter or longer. |
 | Jitter | Reads nearby packets early or late. |
@@ -91,6 +91,8 @@ followed by three increasingly damaged sections. The WAV is ignored by Git.
 - The audio callback performs no heap allocation, file access, logging, or locks.
 - All event decisions occur at internal packet boundaries, independently of the
   host's buffer size.
+- Corruption modes are isolated: a zeroed knob cannot inject or continue its
+  effect, and the link controls only shape the modes that are enabled.
 - Latency remains fixed at 50 ms even when packet size changes, avoiding dynamic
   plugin-delay-compensation changes in the DAW.
 - The custom editor keeps all controls on one compact surface and preserves the

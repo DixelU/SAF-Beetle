@@ -58,8 +58,6 @@ void BtleProcessor::reset()
     stereoLagFramesRemaining_ = 0;
     jitterOffsetFrames_ = 0;
     pendingSwapBack_ = false;
-    badFramesRemaining_ = 0;
-    frameMuted_ = false;
     frameAction_ = FrameAction::normal;
     driftOffset_ = 0.0;
     stereoLagSamples_ = 0.0;
@@ -86,6 +84,32 @@ void BtleProcessor::setParameters(const Parameters& parameters) noexcept
     parameters_.drift = clampUnit(parameters_.drift);
     parameters_.mix = clampUnit(parameters_.mix);
     parameters_.outputGain = std::clamp(parameters_.outputGain, 0.0f, 4.0f);
+
+    const auto fullyHealthy = parameters_.quality >= 1.0f;
+    if (fullyHealthy || parameters_.stutter <= 0.0f)
+        stutterFramesRemaining_ = 0;
+    if (fullyHealthy || parameters_.jitter <= 0.0f)
+    {
+        jitterFramesRemaining_ = 0;
+        jitterOffsetFrames_ = 0;
+    }
+    if (fullyHealthy || parameters_.temporalSwap <= 0.0f)
+    {
+        swapFramesRemaining_ = 0;
+        swapDurationFrames_ = 0;
+        swapOffsetFrames_ = 0;
+        pendingSwapBack_ = false;
+    }
+    if (fullyHealthy || parameters_.stereoSkew <= 0.0f)
+    {
+        stereoLagFramesRemaining_ = 0;
+        stereoLagSamples_ = 0.0;
+    }
+    if (fullyHealthy || parameters_.drift <= 0.0f)
+    {
+        driftOffset_ = 0.0;
+        driftRate_ = 0.0;
+    }
 
     if (parameters_.seed != oldSeed)
         randomState_ = parameters_.seed == 0 ? 0x53414642u : parameters_.seed;
@@ -129,17 +153,12 @@ void BtleProcessor::process(float* const* channelData,
             for (std::size_t channel = 0; channel < channels; ++channel)
             {
                 const auto dry = readHistory(channel, drySample);
-                auto wet = 0.0f;
-
-                if (!frameMuted_)
-                {
-                    auto source = frameReadBase_[channel]
-                        + static_cast<double>(framePosition_)
-                        + driftOffset_;
-                    if (channel == 1)
-                        source -= stereoLagSamples_;
-                    wet = readHistory(channel, source);
-                }
+                auto source = frameReadBase_[channel]
+                    + static_cast<double>(framePosition_)
+                    + driftOffset_;
+                if (channel == 1)
+                    source -= stereoLagSamples_;
+                const auto wet = readHistory(channel, source);
 
                 const auto mixed = dry + (wet - dry) * smoothedMix_;
                 channelData[channel][sampleIndex] = mixed * smoothedGain_;
@@ -180,14 +199,12 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
 {
     currentPacketSamples_ = packetSamplesFromParameters();
     currentNominalStart_ = nominalStart;
-    frameMuted_ = false;
     frameAction_ = FrameAction::normal;
     ++statistics_.frames;
 
     const auto damage = 1.0f - parameters_.quality;
     const auto damageSquared = damage * damage;
-    const auto enterBadChance = damageSquared
-        * (0.02f + parameters_.burstiness * 0.09f);
+    const auto burstDensity = 0.25f + parameters_.burstiness * 1.15f;
 
     if (stereoLagFramesRemaining_ > 0)
         --stereoLagFramesRemaining_;
@@ -195,23 +212,6 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
         stereoLagSamples_ = 0.0;
 
     auto sourceStart = nominalStart;
-
-    const auto applyLoss = [&]() noexcept
-    {
-        ++statistics_.lostFrames;
-        if (randomUnit() < 0.12f + damage * 0.28f)
-        {
-            frameMuted_ = true;
-            frameAction_ = FrameAction::lossMute;
-            ++statistics_.mutedFrames;
-        }
-        else
-        {
-            sourceStart = lastGoodSourceStart_;
-            frameAction_ = FrameAction::lossRepeat;
-            ++statistics_.repeatedFrames;
-        }
-    };
 
     if (stutterFramesRemaining_ > 0)
     {
@@ -248,22 +248,21 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
         frameAction_ = FrameAction::jitter;
         ++statistics_.jitteredFrames;
     }
-    else if (badFramesRemaining_ > 0)
+    else if (stereoLagSamples_ > 0.0)
     {
-        --badFramesRemaining_;
-        applyLoss();
-    }
-    else if (randomUnit() < enterBadChance)
-    {
-        badFramesRemaining_ = corruptionLengthFrames() - 1;
-        applyLoss();
+        // Stereo desync delays the right channel while both channels continue
+        // to advance. Do not start a packet-selection effect during this event.
+        lastGoodSourceStart_ = nominalStart;
     }
     else
     {
         const auto eventRoll = randomUnit();
-        const auto stutterChance = damageSquared * parameters_.stutter * 0.030f;
-        const auto swapChance = damageSquared * parameters_.temporalSwap * 0.025f;
-        const auto jitterChance = damageSquared * parameters_.jitter * 0.080f;
+        const auto stutterChance = damageSquared * burstDensity * parameters_.stutter * 0.030f;
+        const auto swapChance = damageSquared * burstDensity * parameters_.temporalSwap * 0.025f;
+        const auto jitterChance = damageSquared * burstDensity * parameters_.jitter * 0.080f;
+        const auto stereoChance = preparedChannels_ > 1
+            ? damageSquared * burstDensity * parameters_.stereoSkew * 0.200f
+            : 0.0f;
 
         if (eventRoll < stutterChance)
         {
@@ -307,18 +306,21 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
             frameAction_ = FrameAction::jitter;
             ++statistics_.jitteredFrames;
         }
+        else if (eventRoll < stutterChance + swapChance + jitterChance + stereoChance)
+        {
+            stereoLagSamples_ = std::max(1.0, randomUnit()
+                * static_cast<double>(currentPacketSamples_));
+            stereoLagFramesRemaining_ = corruptionLengthFrames() - 1;
+            lastGoodSourceStart_ = nominalStart;
+        }
         else
         {
             lastGoodSourceStart_ = nominalStart;
         }
     }
 
-    if (preparedChannels_ > 1 && stereoLagFramesRemaining_ == 0
-        && randomUnit() < damageSquared * parameters_.stereoSkew * 0.20f)
-    {
-        stereoLagSamples_ = randomUnit() * static_cast<double>(currentPacketSamples_);
-        stereoLagFramesRemaining_ = corruptionLengthFrames() - 1;
-    }
+    if (preparedChannels_ > 1 && stereoLagSamples_ > 0.0)
+        ++statistics_.stereoDelayedFrames;
 
     const auto maximumFutureStart = nominalStart
         + static_cast<std::int64_t>(latencySamples_)
