@@ -74,6 +74,7 @@ private:
 
     ParameterKnob quality_;
     PacketSelector packet_;
+    ParameterKnob boundarySmooth_;
     ParameterKnob burstiness_;
     ParameterKnob burstLength_;
     ParameterKnob burstVariance_;

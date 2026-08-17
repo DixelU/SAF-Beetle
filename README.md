@@ -31,6 +31,7 @@ away from its expected packet position.
 | --- | --- |
 | Signal Quality | Master intensity. Lower values increase the selected corruption modes. |
 | Packet Size | Duration of each independently damaged audio frame. |
+| Boundary Smooth | Crossfades source changes over up to half a packet. `0%` preserves hard boundaries; higher values suppress clicks. |
 | Burstiness | How often a new selected corruption burst is introduced. |
 | Burst Length | Duration of a corruption event in packets, from 1 to 1000. |
 | Burst Variance | Randomises each event length by up to one octave shorter or longer. |
@@ -91,6 +92,8 @@ followed by three increasingly damaged sections. The WAV is ignored by Git.
 - The audio callback performs no heap allocation, file access, logging, or locks.
 - All event decisions occur at internal packet boundaries, independently of the
   host's buffer size.
+- Packet-boundary smoothing uses an allocation-free raised-cosine crossfade and
+  remains exactly transparent when consecutive packets already form one stream.
 - Corruption modes are isolated: a zeroed knob cannot inject or continue its
   effect, and the link controls only shape the modes that are enabled.
 - Latency remains fixed at 50 ms even when packet size changes, avoiding dynamic

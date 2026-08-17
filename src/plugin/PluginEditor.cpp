@@ -245,6 +245,9 @@ SafBeetleAudioProcessorEditor::SafBeetleAudioProcessorEditor(SafBeetleAudioProce
       quality_(processor.parameters, "quality", "Signal Quality", "%", 1, 65.0,
                juce::Colour{green}, "Master intensity for the enabled corruption modes"),
       packet_(processor.parameters),
+      boundarySmooth_(processor.parameters, "smooth", "Boundary Smooth", "%", 1, 0.0,
+                      juce::Colour{orange},
+                      "Crossfades packet transitions; zero keeps hard boundaries"),
       burstiness_(processor.parameters, "burst", "Burstiness", "%", 1, 65.0,
                   juce::Colour{orange}, "Event density for the enabled corruption modes"),
       burstLength_(processor.parameters, "burstlen", "Burst Length", " pkt", 0, 8.0,
@@ -271,8 +274,8 @@ SafBeetleAudioProcessorEditor::SafBeetleAudioProcessorEditor(SafBeetleAudioProce
     setLookAndFeel(&lookAndFeel_);
     setOpaque(true);
 
-    for (auto* control : std::array<juce::Component*, 13>{
-             &quality_, &packet_, &burstiness_, &burstLength_, &burstVariance_,
+    for (auto* control : std::array<juce::Component*, 14>{
+             &quality_, &packet_, &boundarySmooth_, &burstiness_, &burstLength_, &burstVariance_,
              &jitter_, &temporalSwap_, &stutter_, &stereoDesync_, &clockDrift_,
              &mix_, &output_, &seed_})
         addAndMakeVisible(*control);
@@ -354,7 +357,7 @@ void SafBeetleAudioProcessorEditor::paint(juce::Graphics& graphics)
     drawPanel(graphics, outputPanel_, "OUTPUT", "parallel blend and repeatable pattern",
               juce::Colour{green});
 
-    drawControlDividers(graphics, linkPanel_.reduced(12).withTrimmedTop(29), 5);
+    drawControlDividers(graphics, linkPanel_.reduced(12).withTrimmedTop(29), 6);
     drawControlDividers(graphics, corruptionPanel_.reduced(12).withTrimmedTop(29), 5);
     drawControlDividers(graphics,
                         outputPanel_.reduced(12).withTrimmedTop(29).withWidth(
@@ -375,7 +378,8 @@ void SafBeetleAudioProcessorEditor::resized()
     outputPanel_ = bounds;
 
     auto linkControls = linkPanel_.reduced(12).withTrimmedTop(29);
-    layoutControls(linkControls, {&quality_, &packet_, &burstiness_, &burstLength_, &burstVariance_});
+    layoutControls(linkControls, {&quality_, &packet_, &boundarySmooth_, &burstiness_,
+                                  &burstLength_, &burstVariance_});
 
     auto corruptionControls = corruptionPanel_.reduced(12).withTrimmedTop(29);
     layoutControls(corruptionControls,

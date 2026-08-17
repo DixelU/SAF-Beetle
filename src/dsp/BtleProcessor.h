@@ -19,6 +19,7 @@ struct Parameters
     float stutter = 0.25f;
     float stereoSkew = 0.25f;
     float drift = 0.20f;
+    float boundarySmoothing = 0.0f;
     float mix = 1.0f;
     float outputGain = 1.0f;
     std::uint32_t seed = 0x53414642u;
@@ -74,6 +75,7 @@ private:
     Statistics statistics_;
     std::vector<std::vector<float>> history_;
     std::vector<double> frameReadBase_;
+    std::vector<double> previousFrameContinuation_;
 
     double sampleRate_ = 48000.0;
     std::size_t historySize_ = 0;
@@ -83,6 +85,7 @@ private:
 
     std::size_t framePosition_ = 0;
     std::size_t currentPacketSamples_ = 240;
+    std::size_t boundaryFadeSamples_ = 0;
     std::int64_t currentNominalStart_ = 0;
     std::int64_t lastGoodSourceStart_ = 0;
     std::int64_t frozenSourceStart_ = 0;
@@ -94,6 +97,7 @@ private:
     std::size_t stereoLagFramesRemaining_ = 0;
     int jitterOffsetFrames_ = 0;
     bool pendingSwapBack_ = false;
+    bool hasPreviousFrame_ = false;
     FrameAction frameAction_ = FrameAction::normal;
 
     double driftOffset_ = 0.0;

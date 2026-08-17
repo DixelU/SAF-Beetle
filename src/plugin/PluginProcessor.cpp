@@ -91,6 +91,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SafBeetleAudioProcessor::cre
         juce::AudioParameterFloatAttributes{}.withLabel("%")));
     layout.add(std::make_unique<ChoiceParameter>(ParameterID{"packet", 1}, "Packet Size",
         juce::StringArray{"2.5 ms", "5 ms", "10 ms", "20 ms"}, 1));
+    layout.add(std::make_unique<FloatParameter>(ParameterID{"smooth", 1}, "Boundary Smooth",
+        juce::NormalisableRange<float>{0.0f, 100.0f, 0.1f}, 0.0f,
+        juce::AudioParameterFloatAttributes{}.withLabel("%")));
     layout.add(std::make_unique<FloatParameter>(ParameterID{"burst", 1}, "Burstiness",
         juce::NormalisableRange<float>{0.0f, 100.0f, 0.1f}, 65.0f,
         juce::AudioParameterFloatAttributes{}.withLabel("%")));
@@ -146,6 +149,7 @@ saf::btle::Parameters SafBeetleAudioProcessor::readParameters() const noexcept
     result.stutter = value("stutter") * 0.01f;
     result.stereoSkew = value("stereo") * 0.01f;
     result.drift = value("drift") * 0.01f;
+    result.boundarySmoothing = value("smooth") * 0.01f;
     result.mix = value("mix") * 0.01f;
     result.outputGain = juce::Decibels::decibelsToGain(value("output"));
     result.seed = static_cast<std::uint32_t>(std::lround(value("seed")));

@@ -52,6 +52,17 @@ std::vector<float> render(const std::vector<float>& input,
     return output;
 }
 
+float maximumPacketBoundaryStep(const std::vector<float>& audio,
+                                std::size_t latency,
+                                std::size_t packetSamples)
+{
+    auto maximum = 0.0f;
+    for (auto boundary = latency + packetSamples;
+         boundary < audio.size(); boundary += packetSamples)
+        maximum = std::max(maximum, std::abs(audio[boundary] - audio[boundary - 1]));
+    return maximum;
+}
+
 saf::btle::Parameters isolatedParameters()
 {
     saf::btle::Parameters parameters;
@@ -125,6 +136,7 @@ void testCleanPathIsExactlyDelayed()
     parameters.quality = 1.0f;
     parameters.mix = 1.0f;
     parameters.drift = 1.0f;
+    parameters.boundarySmoothing = 1.0f;
 
     const auto input = makeSignal(24000);
     const auto output = render(input, parameters, 127);
@@ -149,6 +161,7 @@ void testRenderingIsIndependentOfHostBlockSize()
     parameters.stutter = 0.75f;
     parameters.stereoSkew = 0.7f;
     parameters.drift = 0.6f;
+    parameters.boundarySmoothing = 0.73f;
     parameters.seed = 123456u;
 
     const auto input = makeSignal(96000);
@@ -204,6 +217,31 @@ void testDriftResyncDoesNotRetriggerPerSample()
     require(statistics.resyncs > 0, "maximum drift must eventually resynchronise");
     require(statistics.resyncs < statistics.frames,
             "one clock correction must not retrigger on each audio sample");
+}
+
+void testBoundarySmoothingReducesPacketClicks()
+{
+    auto parameters = isolatedParameters();
+    parameters.stutter = 1.0f;
+    parameters.burstLengthPackets = 6.0f;
+    parameters.seed = 812u;
+
+    const auto input = makeSignal(static_cast<std::size_t>(sampleRate * 4.0));
+    parameters.boundarySmoothing = 0.0f;
+    const auto hardBoundaries = render(input, parameters, 257);
+    parameters.boundarySmoothing = 1.0f;
+    const auto smoothBoundaries = render(input, parameters, 257);
+
+    const auto latency = static_cast<std::size_t>(sampleRate
+        * saf::btle::BtleProcessor::latencySeconds);
+    const auto packetSamples = static_cast<std::size_t>(std::llround(
+        sampleRate * static_cast<double>(parameters.packetSizeMs) * 0.001));
+    const auto hardStep = maximumPacketBoundaryStep(hardBoundaries, latency, packetSamples);
+    const auto smoothStep = maximumPacketBoundaryStep(smoothBoundaries, latency, packetSamples);
+
+    require(hardStep > 0.25f, "the deterministic stutter render must contain a hard packet click");
+    require(smoothStep < hardStep * 0.35f,
+            "maximum smoothing must materially reduce packet-boundary discontinuities");
 }
 
 void testEachCorruptionControlIsIsolated()
@@ -329,6 +367,7 @@ int main()
     testRenderingIsIndependentOfHostBlockSize();
     testDamagedPathActuallyChangesAudio();
     testDriftResyncDoesNotRetriggerPerSample();
+    testBoundarySmoothingReducesPacketClicks();
     testEachCorruptionControlIsIsolated();
     testZeroedKnobCancelsLongRunningEvent();
     testStereoDesyncKeepsPacketsAdvancing();

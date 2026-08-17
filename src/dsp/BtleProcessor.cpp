@@ -32,6 +32,7 @@ void BtleProcessor::prepare(double sampleRate, std::size_t maximumBlockSize, std
         + maximumBlockSize + 8;
     history_.assign(preparedChannels_, std::vector<float>(historySize_, 0.0f));
     frameReadBase_.assign(preparedChannels_, 0.0);
+    previousFrameContinuation_.assign(preparedChannels_, 0.0);
 
     const auto smoothingSamples = std::max(1.0, sampleRate_ * 0.020);
     smoothingAmount_ = static_cast<float>(1.0 - std::exp(-1.0 / smoothingSamples));
@@ -47,6 +48,7 @@ void BtleProcessor::reset()
     absoluteSample_ = 0;
     framePosition_ = 0;
     currentPacketSamples_ = packetSamplesFromParameters();
+    boundaryFadeSamples_ = 0;
     currentNominalStart_ = 0;
     lastGoodSourceStart_ = 0;
     frozenSourceStart_ = 0;
@@ -58,6 +60,7 @@ void BtleProcessor::reset()
     stereoLagFramesRemaining_ = 0;
     jitterOffsetFrames_ = 0;
     pendingSwapBack_ = false;
+    hasPreviousFrame_ = false;
     frameAction_ = FrameAction::normal;
     driftOffset_ = 0.0;
     stereoLagSamples_ = 0.0;
@@ -82,6 +85,7 @@ void BtleProcessor::setParameters(const Parameters& parameters) noexcept
     parameters_.stutter = clampUnit(parameters_.stutter);
     parameters_.stereoSkew = clampUnit(parameters_.stereoSkew);
     parameters_.drift = clampUnit(parameters_.drift);
+    parameters_.boundarySmoothing = clampUnit(parameters_.boundarySmoothing);
     parameters_.mix = clampUnit(parameters_.mix);
     parameters_.outputGain = std::clamp(parameters_.outputGain, 0.0f, 4.0f);
 
@@ -158,7 +162,20 @@ void BtleProcessor::process(float* const* channelData,
                     + driftOffset_;
                 if (channel == 1)
                     source -= stereoLagSamples_;
-                const auto wet = readHistory(channel, source);
+                auto wet = readHistory(channel, source);
+
+                if (boundaryFadeSamples_ > 1 && framePosition_ < boundaryFadeSamples_)
+                {
+                    const auto previousSource = previousFrameContinuation_[channel]
+                        + static_cast<double>(framePosition_)
+                        + driftOffset_;
+                    const auto previousWet = readHistory(channel, previousSource);
+                    const auto progress = static_cast<double>(framePosition_)
+                        / static_cast<double>(boundaryFadeSamples_ - 1);
+                    const auto blend = static_cast<float>(0.5 - 0.5
+                        * std::cos(3.14159265358979323846 * progress));
+                    wet = previousWet + (wet - previousWet) * blend;
+                }
 
                 const auto mixed = dry + (wet - dry) * smoothedMix_;
                 channelData[channel][sampleIndex] = mixed * smoothedGain_;
@@ -197,6 +214,18 @@ const Statistics& BtleProcessor::getStatistics() const noexcept
 
 void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
 {
+    const auto previousPacketSamples = currentPacketSamples_;
+    const auto previousStereoLagSamples = stereoLagSamples_;
+    if (hasPreviousFrame_)
+    {
+        for (std::size_t channel = 0; channel < previousFrameContinuation_.size(); ++channel)
+        {
+            previousFrameContinuation_[channel] = frameReadBase_[channel]
+                + static_cast<double>(previousPacketSamples)
+                - (channel == 1 ? previousStereoLagSamples : 0.0);
+        }
+    }
+
     currentPacketSamples_ = packetSamplesFromParameters();
     currentNominalStart_ = nominalStart;
     frameAction_ = FrameAction::normal;
@@ -329,6 +358,18 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
 
     for (auto& base : frameReadBase_)
         base = static_cast<double>(sourceStart);
+
+    boundaryFadeSamples_ = 0;
+    const auto maximumFadeSamples = currentPacketSamples_ / 2;
+    if (hasPreviousFrame_ && parameters_.boundarySmoothing > 0.0f
+        && maximumFadeSamples >= 2)
+    {
+        const auto requestedFadeSamples = static_cast<std::size_t>(std::llround(
+            static_cast<double>(maximumFadeSamples) * parameters_.boundarySmoothing));
+        boundaryFadeSamples_ = std::clamp<std::size_t>(requestedFadeSamples, 2,
+                                                       maximumFadeSamples);
+    }
+    hasPreviousFrame_ = true;
 
     const auto driftMagnitude = static_cast<double>(parameters_.drift) * 0.0015;
     if (std::abs(driftRate_) < std::numeric_limits<double>::epsilon())
