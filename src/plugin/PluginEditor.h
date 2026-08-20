@@ -82,6 +82,7 @@ private:
     ParameterKnob jitter_;
     ParameterKnob temporalSwap_;
     ParameterKnob stutter_;
+    ParameterKnob packetDropout_;
     ParameterKnob stereoDesync_;
     ParameterKnob clockDrift_;
 

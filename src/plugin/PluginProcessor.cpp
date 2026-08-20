@@ -112,6 +112,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SafBeetleAudioProcessor::cre
     layout.add(std::make_unique<FloatParameter>(ParameterID{"stutter", 1}, "Stutter",
         juce::NormalisableRange<float>{0.0f, 100.0f, 0.1f}, 25.0f,
         juce::AudioParameterFloatAttributes{}.withLabel("%")));
+    layout.add(std::make_unique<FloatParameter>(ParameterID{"dropout", 1}, "Packet Dropout",
+        juce::NormalisableRange<float>{0.0f, 100.0f, 0.1f}, 0.0f,
+        juce::AudioParameterFloatAttributes{}.withLabel("%")));
     layout.add(std::make_unique<FloatParameter>(ParameterID{"stereo", 1}, "Stereo Desync",
         juce::NormalisableRange<float>{0.0f, 100.0f, 0.1f}, 25.0f,
         juce::AudioParameterFloatAttributes{}.withLabel("%")));
@@ -147,6 +150,7 @@ saf::btle::Parameters SafBeetleAudioProcessor::readParameters() const noexcept
     result.jitter = value("jitter") * 0.01f;
     result.temporalSwap = value("swap") * 0.01f;
     result.stutter = value("stutter") * 0.01f;
+    result.dropout = value("dropout") * 0.01f;
     result.stereoSkew = value("stereo") * 0.01f;
     result.drift = value("drift") * 0.01f;
     result.boundarySmoothing = value("smooth") * 0.01f;

@@ -17,6 +17,7 @@ struct Parameters
     float jitter = 0.35f;
     float temporalSwap = 0.20f;
     float stutter = 0.25f;
+    float dropout = 0.0f;
     float stereoSkew = 0.25f;
     float drift = 0.20f;
     float boundarySmoothing = 0.0f;
@@ -56,6 +57,7 @@ private:
     enum class FrameAction
     {
         normal,
+        dropout,
         jitter,
         swapForward,
         swapBackward,
@@ -90,6 +92,7 @@ private:
     std::int64_t lastGoodSourceStart_ = 0;
     std::int64_t frozenSourceStart_ = 0;
     std::size_t stutterFramesRemaining_ = 0;
+    std::size_t dropoutFramesRemaining_ = 0;
     std::size_t jitterFramesRemaining_ = 0;
     std::size_t swapFramesRemaining_ = 0;
     std::size_t swapDurationFrames_ = 0;
@@ -98,6 +101,8 @@ private:
     int jitterOffsetFrames_ = 0;
     bool pendingSwapBack_ = false;
     bool hasPreviousFrame_ = false;
+    bool frameMuted_ = false;
+    bool previousFrameMuted_ = false;
     FrameAction frameAction_ = FrameAction::normal;
 
     double driftOffset_ = 0.0;

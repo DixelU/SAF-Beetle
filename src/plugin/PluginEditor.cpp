@@ -260,6 +260,8 @@ SafBeetleAudioProcessorEditor::SafBeetleAudioProcessorEditor(SafBeetleAudioProce
                     juce::Colour{warmOrange}, "Exchanges displaced packet ranges"),
       stutter_(processor.parameters, "stutter", "Stutter", "%", 1, 25.0,
                juce::Colour{warmOrange}, "Freezes and repeats a packet"),
+      packetDropout_(processor.parameters, "dropout", "Packet Dropout", "%", 1, 0.0,
+                     juce::Colour{warmOrange}, "Replaces complete packet bursts with silence"),
       stereoDesync_(processor.parameters, "stereo", "Stereo Desync", "%", 1, 25.0,
                     juce::Colour{warmOrange}, "Temporarily delays the right channel"),
       clockDrift_(processor.parameters, "drift", "Clock Drift", "%", 1, 20.0,
@@ -274,9 +276,9 @@ SafBeetleAudioProcessorEditor::SafBeetleAudioProcessorEditor(SafBeetleAudioProce
     setLookAndFeel(&lookAndFeel_);
     setOpaque(true);
 
-    for (auto* control : std::array<juce::Component*, 14>{
+    for (auto* control : std::array<juce::Component*, 15>{
              &quality_, &packet_, &boundarySmooth_, &burstiness_, &burstLength_, &burstVariance_,
-             &jitter_, &temporalSwap_, &stutter_, &stereoDesync_, &clockDrift_,
+             &jitter_, &temporalSwap_, &stutter_, &packetDropout_, &stereoDesync_, &clockDrift_,
              &mix_, &output_, &seed_})
         addAndMakeVisible(*control);
 
@@ -352,13 +354,13 @@ void SafBeetleAudioProcessorEditor::paint(juce::Graphics& graphics)
                       juce::Justification::centredLeft);
 
     drawPanel(graphics, linkPanel_, "LINK", "packet shape and fault envelope", juce::Colour{orange});
-    drawPanel(graphics, corruptionPanel_, "CORRUPTION", "timing, repeats and channel damage",
+    drawPanel(graphics, corruptionPanel_, "CORRUPTION", "timing, repeats, dropouts and channel damage",
               juce::Colour{warmOrange});
     drawPanel(graphics, outputPanel_, "OUTPUT", "parallel blend and repeatable pattern",
               juce::Colour{green});
 
     drawControlDividers(graphics, linkPanel_.reduced(12).withTrimmedTop(29), 6);
-    drawControlDividers(graphics, corruptionPanel_.reduced(12).withTrimmedTop(29), 5);
+    drawControlDividers(graphics, corruptionPanel_.reduced(12).withTrimmedTop(29), 6);
     drawControlDividers(graphics,
                         outputPanel_.reduced(12).withTrimmedTop(29).withWidth(
                             outputPanel_.reduced(12).getWidth() * 3 / 5),
@@ -383,7 +385,8 @@ void SafBeetleAudioProcessorEditor::resized()
 
     auto corruptionControls = corruptionPanel_.reduced(12).withTrimmedTop(29);
     layoutControls(corruptionControls,
-                   {&jitter_, &temporalSwap_, &stutter_, &stereoDesync_, &clockDrift_});
+                   {&jitter_, &temporalSwap_, &stutter_, &packetDropout_,
+                    &stereoDesync_, &clockDrift_});
 
     auto outputContents = outputPanel_.reduced(12).withTrimmedTop(29);
     auto outputControls = outputContents.removeFromLeft(outputContents.getWidth() * 3 / 5);

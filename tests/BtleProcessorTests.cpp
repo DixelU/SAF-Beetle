@@ -74,6 +74,7 @@ saf::btle::Parameters isolatedParameters()
     parameters.jitter = 0.0f;
     parameters.temporalSwap = 0.0f;
     parameters.stutter = 0.0f;
+    parameters.dropout = 0.0f;
     parameters.stereoSkew = 0.0f;
     parameters.drift = 0.0f;
     parameters.mix = 1.0f;
@@ -116,8 +117,11 @@ saf::btle::Statistics collectStatistics(const saf::btle::Parameters& parameters,
 void requireNoUnselectedPacketEffects(const saf::btle::Statistics& statistics,
                                       std::string_view mode)
 {
-    require(statistics.lostFrames == 0, "solo mode must not trigger hidden packet loss");
-    require(statistics.mutedFrames == 0, "solo mode must not trigger hidden packet muting");
+    if (mode != "dropout")
+    {
+        require(statistics.lostFrames == 0, "solo mode must not trigger packet dropout");
+        require(statistics.mutedFrames == 0, "solo mode must not mute packets");
+    }
     if (mode != "stutter")
         require(statistics.repeatedFrames == 0, "solo mode must not trigger stutter/repetition");
     if (mode != "jitter")
@@ -159,6 +163,7 @@ void testRenderingIsIndependentOfHostBlockSize()
     parameters.jitter = 0.9f;
     parameters.temporalSwap = 0.8f;
     parameters.stutter = 0.75f;
+    parameters.dropout = 0.65f;
     parameters.stereoSkew = 0.7f;
     parameters.drift = 0.6f;
     parameters.boundarySmoothing = 0.73f;
@@ -182,6 +187,7 @@ void testDamagedPathActuallyChangesAudio()
     damagedParameters.jitter = 1.0f;
     damagedParameters.temporalSwap = 1.0f;
     damagedParameters.stutter = 1.0f;
+    damagedParameters.dropout = 1.0f;
     damagedParameters.drift = 1.0f;
 
     const auto input = makeSignal(96000);
@@ -244,6 +250,49 @@ void testBoundarySmoothingReducesPacketClicks()
             "maximum smoothing must materially reduce packet-boundary discontinuities");
 }
 
+void testDropoutBoundarySmoothing()
+{
+    auto parameters = isolatedParameters();
+    parameters.dropout = 1.0f;
+    parameters.burstLengthPackets = 4.0f;
+    parameters.seed = 812u;
+
+    const std::vector<float> input(static_cast<std::size_t>(sampleRate * 4.0), 0.5f);
+    parameters.boundarySmoothing = 0.0f;
+    const auto hardDropouts = render(input, parameters, 257);
+    parameters.boundarySmoothing = 1.0f;
+    const auto smoothDropouts = render(input, parameters, 257);
+
+    const auto latency = static_cast<std::size_t>(sampleRate
+        * saf::btle::BtleProcessor::latencySeconds);
+    const auto packetSamples = static_cast<std::size_t>(std::llround(
+        sampleRate * static_cast<double>(parameters.packetSizeMs) * 0.001));
+
+    std::size_t droppedPackets = 0;
+    for (auto start = latency; start + packetSamples <= hardDropouts.size(); start += packetSamples)
+    {
+        const auto first = hardDropouts.begin() + static_cast<std::ptrdiff_t>(start);
+        const auto last = first + static_cast<std::ptrdiff_t>(packetSamples);
+        const auto allZero = std::all_of(first, last, [](float sample) { return sample == 0.0f; });
+        const auto allSignal = std::all_of(first, last, [](float sample)
+        {
+            return std::abs(sample - 0.5f) < 1.0e-6f;
+        });
+        require(allZero || allSignal,
+                "Packet Dropout at zero smoothing must cut complete packets");
+        if (allZero)
+            ++droppedPackets;
+    }
+
+    require(droppedPackets > 0, "maximum Packet Dropout must produce silent packets");
+
+    const auto hardStep = maximumPacketBoundaryStep(hardDropouts, latency, packetSamples);
+    const auto smoothStep = maximumPacketBoundaryStep(smoothDropouts, latency, packetSamples);
+    require(hardStep > 0.45f, "hard Packet Dropout must contain an abrupt edge");
+    require(smoothStep < hardStep * 0.10f,
+            "Boundary Smooth must soften Packet Dropout entry and exit");
+}
+
 void testEachCorruptionControlIsIsolated()
 {
     auto parameters = isolatedParameters();
@@ -263,6 +312,14 @@ void testEachCorruptionControlIsIsolated()
     statistics = collectStatistics(parameters, 3.0);
     require(statistics.repeatedFrames > 0, "solo stutter must produce repeated frames");
     requireNoUnselectedPacketEffects(statistics, "stutter");
+
+    parameters = isolatedParameters();
+    parameters.dropout = 1.0f;
+    statistics = collectStatistics(parameters, 3.0);
+    require(statistics.lostFrames > 0, "solo Packet Dropout must produce lost packets");
+    require(statistics.mutedFrames == statistics.lostFrames,
+            "each dropped packet must be reported as muted");
+    requireNoUnselectedPacketEffects(statistics, "dropout");
 
     parameters = isolatedParameters();
     parameters.stereoSkew = 1.0f;
@@ -368,6 +425,7 @@ int main()
     testDamagedPathActuallyChangesAudio();
     testDriftResyncDoesNotRetriggerPerSample();
     testBoundarySmoothingReducesPacketClicks();
+    testDropoutBoundarySmoothing();
     testEachCorruptionControlIsIsolated();
     testZeroedKnobCancelsLongRunningEvent();
     testStereoDesyncKeepsPacketsAdvancing();

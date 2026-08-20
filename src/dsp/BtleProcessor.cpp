@@ -53,6 +53,7 @@ void BtleProcessor::reset()
     lastGoodSourceStart_ = 0;
     frozenSourceStart_ = 0;
     stutterFramesRemaining_ = 0;
+    dropoutFramesRemaining_ = 0;
     jitterFramesRemaining_ = 0;
     swapFramesRemaining_ = 0;
     swapDurationFrames_ = 0;
@@ -61,6 +62,8 @@ void BtleProcessor::reset()
     jitterOffsetFrames_ = 0;
     pendingSwapBack_ = false;
     hasPreviousFrame_ = false;
+    frameMuted_ = false;
+    previousFrameMuted_ = false;
     frameAction_ = FrameAction::normal;
     driftOffset_ = 0.0;
     stereoLagSamples_ = 0.0;
@@ -83,6 +86,7 @@ void BtleProcessor::setParameters(const Parameters& parameters) noexcept
     parameters_.jitter = clampUnit(parameters_.jitter);
     parameters_.temporalSwap = clampUnit(parameters_.temporalSwap);
     parameters_.stutter = clampUnit(parameters_.stutter);
+    parameters_.dropout = clampUnit(parameters_.dropout);
     parameters_.stereoSkew = clampUnit(parameters_.stereoSkew);
     parameters_.drift = clampUnit(parameters_.drift);
     parameters_.boundarySmoothing = clampUnit(parameters_.boundarySmoothing);
@@ -92,6 +96,8 @@ void BtleProcessor::setParameters(const Parameters& parameters) noexcept
     const auto fullyHealthy = parameters_.quality >= 1.0f;
     if (fullyHealthy || parameters_.stutter <= 0.0f)
         stutterFramesRemaining_ = 0;
+    if (fullyHealthy || parameters_.dropout <= 0.0f)
+        dropoutFramesRemaining_ = 0;
     if (fullyHealthy || parameters_.jitter <= 0.0f)
     {
         jitterFramesRemaining_ = 0;
@@ -157,19 +163,29 @@ void BtleProcessor::process(float* const* channelData,
             for (std::size_t channel = 0; channel < channels; ++channel)
             {
                 const auto dry = readHistory(channel, drySample);
-                auto source = frameReadBase_[channel]
-                    + static_cast<double>(framePosition_)
-                    + driftOffset_;
-                if (channel == 1)
-                    source -= stereoLagSamples_;
-                auto wet = readHistory(channel, source);
+                auto wet = 0.0f;
+
+                if (!frameMuted_)
+                {
+                    auto source = frameReadBase_[channel]
+                        + static_cast<double>(framePosition_)
+                        + driftOffset_;
+                    if (channel == 1)
+                        source -= stereoLagSamples_;
+                    wet = readHistory(channel, source);
+                }
 
                 if (boundaryFadeSamples_ > 1 && framePosition_ < boundaryFadeSamples_)
                 {
-                    const auto previousSource = previousFrameContinuation_[channel]
-                        + static_cast<double>(framePosition_)
-                        + driftOffset_;
-                    const auto previousWet = readHistory(channel, previousSource);
+                    auto previousWet = 0.0f;
+                    if (!previousFrameMuted_)
+                    {
+                        const auto previousSource = previousFrameContinuation_[channel]
+                            + static_cast<double>(framePosition_)
+                            + driftOffset_;
+                        previousWet = readHistory(channel, previousSource);
+                    }
+
                     const auto progress = static_cast<double>(framePosition_)
                         / static_cast<double>(boundaryFadeSamples_ - 1);
                     const auto blend = static_cast<float>(0.5 - 0.5
@@ -216,6 +232,7 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
 {
     const auto previousPacketSamples = currentPacketSamples_;
     const auto previousStereoLagSamples = stereoLagSamples_;
+    previousFrameMuted_ = frameMuted_;
     if (hasPreviousFrame_)
     {
         for (std::size_t channel = 0; channel < previousFrameContinuation_.size(); ++channel)
@@ -228,6 +245,7 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
 
     currentPacketSamples_ = packetSamplesFromParameters();
     currentNominalStart_ = nominalStart;
+    frameMuted_ = false;
     frameAction_ = FrameAction::normal;
     ++statistics_.frames;
 
@@ -248,6 +266,14 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
         --stutterFramesRemaining_;
         frameAction_ = FrameAction::stutter;
         ++statistics_.repeatedFrames;
+    }
+    else if (dropoutFramesRemaining_ > 0)
+    {
+        --dropoutFramesRemaining_;
+        frameMuted_ = true;
+        frameAction_ = FrameAction::dropout;
+        ++statistics_.lostFrames;
+        ++statistics_.mutedFrames;
     }
     else if (swapFramesRemaining_ > 0)
     {
@@ -287,6 +313,7 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
     {
         const auto eventRoll = randomUnit();
         const auto stutterChance = damageSquared * burstDensity * parameters_.stutter * 0.030f;
+        const auto dropoutChance = damageSquared * burstDensity * parameters_.dropout * 0.060f;
         const auto swapChance = damageSquared * burstDensity * parameters_.temporalSwap * 0.025f;
         const auto jitterChance = damageSquared * burstDensity * parameters_.jitter * 0.080f;
         const auto stereoChance = preparedChannels_ > 1
@@ -301,7 +328,15 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
             frameAction_ = FrameAction::stutter;
             ++statistics_.repeatedFrames;
         }
-        else if (eventRoll < stutterChance + swapChance)
+        else if (eventRoll < stutterChance + dropoutChance)
+        {
+            dropoutFramesRemaining_ = corruptionLengthFrames() - 1;
+            frameMuted_ = true;
+            frameAction_ = FrameAction::dropout;
+            ++statistics_.lostFrames;
+            ++statistics_.mutedFrames;
+        }
+        else if (eventRoll < stutterChance + dropoutChance + swapChance)
         {
             swapDurationFrames_ = corruptionLengthFrames();
             const auto maximumForwardFrames = std::max(1, static_cast<int>(latencySamples_
@@ -320,7 +355,7 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
             frameAction_ = FrameAction::swapForward;
             ++statistics_.swappedFrames;
         }
-        else if (eventRoll < stutterChance + swapChance + jitterChance)
+        else if (eventRoll < stutterChance + dropoutChance + swapChance + jitterChance)
         {
             const auto maximumForwardFrames = std::max(1, static_cast<int>(latencySamples_
                 / currentPacketSamples_) - 1);
@@ -335,7 +370,7 @@ void BtleProcessor::beginFrame(std::int64_t nominalStart) noexcept
             frameAction_ = FrameAction::jitter;
             ++statistics_.jitteredFrames;
         }
-        else if (eventRoll < stutterChance + swapChance + jitterChance + stereoChance)
+        else if (eventRoll < stutterChance + dropoutChance + swapChance + jitterChance + stereoChance)
         {
             stereoLagSamples_ = std::max(1.0, randomUnit()
                 * static_cast<double>(currentPacketSamples_));
